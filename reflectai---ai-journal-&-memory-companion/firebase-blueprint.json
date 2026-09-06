@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "JournalEntry": { ... },
+    "MemoryItem": { ... },
+    "WeeklyReflection": { ... },
+    "UserInteraction": { ... }
+  },
+  "firestore": {
+    "/users/{userId}/entries/{entryId}": {
+      "schema": "#/entities/JournalEntry",
+      "description": "User-isolated reflective journal entries and chat history"
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": "#/entities/MemoryItem",
+      "description": "User-isolated long-term memories and cognitive patterns"
+    },
+    "/users/{userId}/reflections/{reflectionId}": {
+      "schema": "#/entities/WeeklyReflection",
+      "description": "User-isolated weekly synthesized reflections"
+    },
+    "/users/{userId}/interactions/{interactionId}": {
+      "schema": "#/entities/UserInteraction",
+      "description": "User-isolated interaction logs and security audit records"
+    }
+  }
+}
