@@ -57,7 +57,7 @@ ReflectAI is an authenticated, multi-turn journaling sanctuary where users can c
 
 ---
 
-## 2. Contest Differentiator Features
+## 2. Differentiating Features
 
 1. **AI Mood Timeline & Analytics**
    - Automatically assesses primary mood, nuanced emotional spectrum, stress levels (1-10), productivity scores (1-10), and topical tags after every journal session.
