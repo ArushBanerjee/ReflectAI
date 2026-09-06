@@ -1,14 +1,41 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Strict User Data Isolation: Only authenticated user can access their own subcollections
+    // 1. Global Default Deny: Deny all top-level collections and unauthorized access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Strict User Data Isolation: Only authenticated user can access their own document & subcollections
+    // Enforces that every read/write occurs strictly under /users/{request.auth.uid}/...
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-      
-      // Matches all subcollections: /interactions, /entries, /memories, /reflections, /insights
+
+      // Journal entries subcollection: /users/{userId}/entries/{entryId}
+      match /entries/{entryId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Long-term memories subcollection: /users/{userId}/memories/{memoryId}
+      match /memories/{memoryId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Weekly reflections subcollection: /users/{userId}/reflections/{reflectionId}
+      match /reflections/{reflectionId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Interaction audit logs: /users/{userId}/interactions/{interactionId}
+      match /interactions/{interactionId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Universal recursive fallback for any nested user-isolated subcollections
       match /{allSubcollections=**} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
   }
 }
+
