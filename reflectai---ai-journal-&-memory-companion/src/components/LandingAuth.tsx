@@ -13,7 +13,7 @@ import {
   Sun,
   Moon,
 } from "lucide-react";
-import { signInWithGoogle } from "../lib/firebase";
+import { signInWithGoogle, signInAnonymouslyUser } from "../lib/firebase";
 import { UserIdentity } from "../types";
 
 interface LandingAuthProps {
@@ -48,15 +48,33 @@ export const LandingAuth: React.FC<LandingAuthProps> = ({
     }
   };
 
-  const handleQuickAccess = (email: string, name: string) => {
-    const user: UserIdentity = {
-      uid: `usr_${btoa(email).replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`,
-      email,
-      displayName: name,
-      photoURL: null,
-      isDemo: true,
-    };
-    onAuthenticated(user);
+  const handleQuickAccess = async (email: string, name: string) => {
+    setIsLoading(true);
+    setAuthError(null);
+    try {
+      try {
+        const anonUser = await signInAnonymouslyUser();
+        onAuthenticated({
+          ...anonUser,
+          email,
+          displayName: name,
+        });
+        return;
+      } catch (anonErr) {
+        console.warn("Anonymous Firebase sign in skipped/not enabled, using local profile:", anonErr);
+      }
+
+      const user: UserIdentity = {
+        uid: `usr_${btoa(email).replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`,
+        email,
+        displayName: name,
+        photoURL: null,
+        isDemo: true,
+      };
+      onAuthenticated(user);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
