@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInAnonymously,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -14,11 +15,67 @@ import {
   doc,
   setDoc,
   getDocs,
+  getDocFromServer,
   deleteDoc,
   query,
   orderBy,
 } from "firebase/firestore";
 import { JournalEntry, MemoryItem, WeeklyReflection, UserIdentity } from "../types";
+
+// Standard Firestore Operation Types for audit and error tracking
+export enum OperationType {
+  CREATE = "create",
+  UPDATE = "update",
+  DELETE = "delete",
+  LIST = "list",
+  GET = "get",
+  WRITE = "write",
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const { auth } = getFirebaseServices();
+  const currentUser = auth?.currentUser;
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: currentUser?.uid || null,
+      email: currentUser?.email || null,
+      emailVerified: currentUser?.emailVerified ?? null,
+      isAnonymous: currentUser?.isAnonymous ?? null,
+      tenantId: currentUser?.tenantId || null,
+      providerInfo:
+        currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error("Firestore Error: ", JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // Clean payload utility: Deeply strip undefined values to ensure zero-crash Firestore writes
 export function cleanPayload<T>(obj: T): T {
@@ -93,8 +150,8 @@ export function getFirebaseServices() {
   }
 }
 
-// Storage abstraction that seamlessly writes to Firestore when configured,
-// and maintains strict user isolation in durable local storage as a fallback.
+// Storage abstraction that seamlessly writes to Firestore under /users/{auth.uid}/...
+// and maintains strict user isolation in durable local storage as a zero-latency fallback.
 
 const LOCAL_STORAGE_PREFIX = "reflectai_user_data_";
 
@@ -103,11 +160,17 @@ function getLocalStoreKey(userId: string, collectionName: string): string {
 }
 
 export async function saveJournalEntry(entry: JournalEntry): Promise<void> {
-  const sanitized = cleanPayload(entry);
-  const { db } = getFirebaseServices();
+  const { auth, db } = getFirebaseServices();
+  // Ensure the effective UID is strictly bound to the authenticated user UID if present
+  const authUid = auth?.currentUser?.uid || entry.userId;
+  const entryToSave: JournalEntry = {
+    ...entry,
+    userId: authUid,
+  };
+  const sanitized = cleanPayload(entryToSave);
 
   // 1. Always sync to user-isolated local cache for instant zero-latency recovery
-  const localKey = getLocalStoreKey(entry.userId, "entries");
+  const localKey = getLocalStoreKey(authUid, "entries");
   try {
     const existingRaw = localStorage.getItem(localKey);
     const existing: JournalEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
@@ -122,24 +185,27 @@ export async function saveJournalEntry(entry: JournalEntry): Promise<void> {
     console.error("Failed to write to local storage cache:", err);
   }
 
-  // 2. Persist to Firestore if configured: path /users/{userId}/entries/{entryId}
-  if (db) {
+  // 2. Persist to Firestore: STRICTLY /users/{auth.uid}/entries/{entryId}
+  if (db && auth?.currentUser) {
+    const path = `users/${authUid}/entries/${entry.id}`;
     try {
-      const entryRef = doc(db, "users", entry.userId, "entries", entry.id);
+      const entryRef = doc(db, "users", authUid, "entries", entry.id);
       await setDoc(entryRef, sanitized, { merge: true });
     } catch (dbErr) {
-      console.error("Firestore saveJournalEntry error:", dbErr);
-      throw new Error(`Firestore sync failed: ${(dbErr as any)?.message || "Unknown error"}`);
+      handleFirestoreError(dbErr, OperationType.WRITE, path);
     }
   }
 }
 
 export async function fetchJournalEntries(userId: string): Promise<JournalEntry[]> {
-  const { db } = getFirebaseServices();
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const path = `users/${authUid}/entries`;
 
-  if (db) {
+  // Only query Firestore if an authenticated user session is active
+  if (db && auth?.currentUser) {
     try {
-      const entriesRef = collection(db, "users", userId, "entries");
+      const entriesRef = collection(db, "users", authUid, "entries");
       const q = query(entriesRef, orderBy("createdAt", "desc"));
       const snapshot = await getDocs(q);
       const entries: JournalEntry[] = [];
@@ -148,31 +214,34 @@ export async function fetchJournalEntries(userId: string): Promise<JournalEntry[
       });
       if (entries.length > 0) {
         // Sync to local cache
-        localStorage.setItem(getLocalStoreKey(userId, "entries"), JSON.stringify(entries));
+        localStorage.setItem(getLocalStoreKey(authUid, "entries"), JSON.stringify(entries));
         return entries;
       }
     } catch (err) {
-      console.warn("Firestore fetchJournalEntries fallback to local:", err);
+      handleFirestoreError(err, OperationType.LIST, path);
     }
   }
 
   // Fallback to local cache
-  const localKey = getLocalStoreKey(userId, "entries");
+  const localKey = getLocalStoreKey(authUid, "entries");
   const raw = localStorage.getItem(localKey);
   return raw ? JSON.parse(raw) : [];
 }
 
 export async function deleteJournalEntry(userId: string, entryId: string): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const path = `users/${authUid}/entries/${entryId}`;
+
+  if (db && auth?.currentUser) {
     try {
-      await deleteDoc(doc(db, "users", userId, "entries", entryId));
+      await deleteDoc(doc(db, "users", authUid, "entries", entryId));
     } catch (err) {
-      console.error("Firestore delete error:", err);
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   }
 
-  const localKey = getLocalStoreKey(userId, "entries");
+  const localKey = getLocalStoreKey(authUid, "entries");
   const raw = localStorage.getItem(localKey);
   if (raw) {
     const existing: JournalEntry[] = JSON.parse(raw);
@@ -181,12 +250,17 @@ export async function deleteJournalEntry(userId: string, entryId: string): Promi
   }
 }
 
-// Long-Term Memories Storage: /users/{userId}/memories/{memoryId}
+// Long-Term Memories Storage: /users/{auth.uid}/memories/{memoryId}
 export async function saveMemoryItem(memory: MemoryItem): Promise<void> {
-  const sanitized = cleanPayload(memory);
-  const { db } = getFirebaseServices();
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || memory.userId;
+  const memoryToSave: MemoryItem = {
+    ...memory,
+    userId: authUid,
+  };
+  const sanitized = cleanPayload(memoryToSave);
 
-  const localKey = getLocalStoreKey(memory.userId, "memories");
+  const localKey = getLocalStoreKey(authUid, "memories");
   try {
     const raw = localStorage.getItem(localKey);
     const existing: MemoryItem[] = raw ? JSON.parse(raw) : [];
@@ -201,51 +275,57 @@ export async function saveMemoryItem(memory: MemoryItem): Promise<void> {
     console.error("Local storage error in saveMemoryItem:", err);
   }
 
-  if (db) {
+  if (db && auth?.currentUser) {
+    const path = `users/${authUid}/memories/${memory.id}`;
     try {
-      const memRef = doc(db, "users", memory.userId, "memories", memory.id);
+      const memRef = doc(db, "users", authUid, "memories", memory.id);
       await setDoc(memRef, sanitized, { merge: true });
     } catch (err) {
-      console.error("Firestore saveMemoryItem error:", err);
-      throw err;
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
   }
 }
 
 export async function fetchMemories(userId: string): Promise<MemoryItem[]> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const path = `users/${authUid}/memories`;
+
+  if (db && auth?.currentUser) {
     try {
-      const memRef = collection(db, "users", userId, "memories");
+      const memRef = collection(db, "users", authUid, "memories");
       const q = query(memRef, orderBy("createdAt", "desc"));
       const snapshot = await getDocs(q);
       const list: MemoryItem[] = [];
       snapshot.forEach((d) => list.push(d.data() as MemoryItem));
       if (list.length > 0) {
-        localStorage.setItem(getLocalStoreKey(userId, "memories"), JSON.stringify(list));
+        localStorage.setItem(getLocalStoreKey(authUid, "memories"), JSON.stringify(list));
         return list;
       }
     } catch (err) {
-      console.warn("Firestore fetchMemories fallback to local:", err);
+      handleFirestoreError(err, OperationType.LIST, path);
     }
   }
 
-  const localKey = getLocalStoreKey(userId, "memories");
+  const localKey = getLocalStoreKey(authUid, "memories");
   const raw = localStorage.getItem(localKey);
   return raw ? JSON.parse(raw) : [];
 }
 
 export async function deleteMemoryItem(userId: string, memoryId: string): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const path = `users/${authUid}/memories/${memoryId}`;
+
+  if (db && auth?.currentUser) {
     try {
-      await deleteDoc(doc(db, "users", userId, "memories", memoryId));
+      await deleteDoc(doc(db, "users", authUid, "memories", memoryId));
     } catch (err) {
-      console.error("Firestore delete memory error:", err);
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   }
 
-  const localKey = getLocalStoreKey(userId, "memories");
+  const localKey = getLocalStoreKey(authUid, "memories");
   const raw = localStorage.getItem(localKey);
   if (raw) {
     const existing: MemoryItem[] = JSON.parse(raw);
@@ -253,12 +333,17 @@ export async function deleteMemoryItem(userId: string, memoryId: string): Promis
   }
 }
 
-// Weekly Reflections: /users/{userId}/reflections/{reflectionId}
+// Weekly Reflections: /users/{auth.uid}/reflections/{reflectionId}
 export async function saveWeeklyReflection(reflection: WeeklyReflection): Promise<void> {
-  const sanitized = cleanPayload(reflection);
-  const { db } = getFirebaseServices();
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || reflection.userId;
+  const reflectionToSave: WeeklyReflection = {
+    ...reflection,
+    userId: authUid,
+  };
+  const sanitized = cleanPayload(reflectionToSave);
 
-  const localKey = getLocalStoreKey(reflection.userId, "reflections");
+  const localKey = getLocalStoreKey(authUid, "reflections");
   try {
     const raw = localStorage.getItem(localKey);
     const existing: WeeklyReflection[] = raw ? JSON.parse(raw) : [];
@@ -273,45 +358,94 @@ export async function saveWeeklyReflection(reflection: WeeklyReflection): Promis
     console.error("Local storage error in saveWeeklyReflection:", err);
   }
 
-  if (db) {
+  if (db && auth?.currentUser) {
+    const path = `users/${authUid}/reflections/${reflection.id}`;
     try {
-      const refDoc = doc(db, "users", reflection.userId, "reflections", reflection.id);
+      const refDoc = doc(db, "users", authUid, "reflections", reflection.id);
       await setDoc(refDoc, sanitized, { merge: true });
     } catch (err) {
-      console.error("Firestore saveWeeklyReflection error:", err);
-      throw err;
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
   }
 }
 
 export async function fetchWeeklyReflections(userId: string): Promise<WeeklyReflection[]> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const path = `users/${authUid}/reflections`;
+
+  if (db && auth?.currentUser) {
     try {
-      const coll = collection(db, "users", userId, "reflections");
+      const coll = collection(db, "users", authUid, "reflections");
       const q = query(coll, orderBy("createdAt", "desc"));
       const snapshot = await getDocs(q);
       const list: WeeklyReflection[] = [];
       snapshot.forEach((d) => list.push(d.data() as WeeklyReflection));
       if (list.length > 0) {
-        localStorage.setItem(getLocalStoreKey(userId, "reflections"), JSON.stringify(list));
+        localStorage.setItem(getLocalStoreKey(authUid, "reflections"), JSON.stringify(list));
         return list;
       }
     } catch (err) {
-      console.warn("Firestore fetchWeeklyReflections fallback to local:", err);
+      handleFirestoreError(err, OperationType.LIST, path);
     }
   }
 
-  const localKey = getLocalStoreKey(userId, "reflections");
+  const localKey = getLocalStoreKey(authUid, "reflections");
   const raw = localStorage.getItem(localKey);
   return raw ? JSON.parse(raw) : [];
+}
+
+// User Interactions Audit Log: /users/{auth.uid}/interactions/{interactionId}
+export async function saveUserInteraction(
+  userId: string,
+  interactionType: string,
+  metadata?: Record<string, any>
+): Promise<void> {
+  const { auth, db } = getFirebaseServices();
+  const authUid = auth?.currentUser?.uid || userId;
+  const interactionId = `int_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const path = `users/${authUid}/interactions/${interactionId}`;
+
+  const payload = cleanPayload({
+    id: interactionId,
+    userId: authUid,
+    interactionType,
+    metadata: metadata || {},
+    timestamp: new Date().toISOString(),
+  });
+
+  if (db && auth?.currentUser) {
+    try {
+      await setDoc(doc(db, "users", authUid, "interactions", interactionId), payload);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, path);
+    }
+  }
+}
+
+// Connection validation helper: strictly verifies connectivity under /users/{auth.uid}/interactions/ping
+export async function validateFirestoreConnection(): Promise<boolean> {
+  const { db, auth } = getFirebaseServices();
+  if (!db || !auth?.currentUser) return false;
+  try {
+    const testDoc = doc(db, "users", auth.currentUser.uid, "interactions", "ping");
+    await getDocFromServer(testDoc);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("the client is offline")) {
+      console.warn("Firestore client is offline. Verify network and configuration.");
+    }
+    return false;
+  }
 }
 
 // Authentication Helpers
 export async function signInWithGoogle(): Promise<UserIdentity> {
   const { auth } = getFirebaseServices();
   if (!auth) {
-    throw new Error("Firebase Auth is not configured with valid API keys. You can use Demo Sign In or configure credentials in Settings.");
+    throw new Error(
+      "Firebase Auth is not configured with valid API keys. You can use Demo Sign In or configure credentials in Settings."
+    );
   }
 
   const provider = new GoogleAuthProvider();
@@ -328,6 +462,22 @@ export async function signInWithGoogle(): Promise<UserIdentity> {
   };
 }
 
+export async function signInAnonymouslyUser(): Promise<UserIdentity> {
+  const { auth } = getFirebaseServices();
+  if (!auth) {
+    throw new Error("Firebase Auth is not configured.");
+  }
+  const result = await signInAnonymously(auth);
+  const u = result.user;
+  return {
+    uid: u.uid,
+    email: u.email || "guest@reflectai.local",
+    displayName: "Guest User",
+    photoURL: null,
+    isDemo: true,
+  };
+}
+
 export async function signOutUser(): Promise<void> {
   const { auth } = getFirebaseServices();
   if (auth) {
@@ -339,3 +489,4 @@ export async function signOutUser(): Promise<void> {
   }
   localStorage.removeItem("reflectai_active_session");
 }
+
