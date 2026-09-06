@@ -1,0 +1,8 @@
+{
+  "name": "ReflectAI - AI Journal & Memory Companion",
+  "description": "An authenticated reflective journaling web app powered by Gemini 3.6 Flash and Cloud Firestore, featuring mood timelines, long-term memory extraction, weekly reflections, and natural language search.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

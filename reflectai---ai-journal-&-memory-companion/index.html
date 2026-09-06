@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReflectAI - AI Journal &amp; Memory Companion</title>
+    <meta name="description" content="An authenticated reflective journaling web app powered by Gemini 3.6 Flash and Cloud Firestore, featuring mood timelines, long-term memory extraction, weekly reflections, and natural language search." />
+    <meta property="og:title" content="ReflectAI - AI Journal &amp; Memory Companion" />
+    <meta property="og:description" content="An authenticated reflective journaling web app powered by Gemini 3.6 Flash and Cloud Firestore, featuring mood timelines, long-term memory extraction, weekly reflections, and natural language search." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Favicons and App Icons -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+    <meta name="theme-color" content="#4f46e5" />
+
+    <!-- Instant Theme Persistence Initialization (prevents flash of wrong theme) -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("reflectai_theme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          if (saved === "dark" || (!saved && prefersDark)) {
+            document.documentElement.classList.add("dark");
+            document.documentElement.setAttribute("data-theme", "dark");
+          } else {
+            document.documentElement.classList.remove("dark");
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

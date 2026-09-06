@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+:root, [data-theme="light"] {
+  --color-bg-app: #fafafa;
+  --color-bg-surface: #ffffff;
+  --color-bg-muted: #f4f4f5;
+  --color-border: #e4e4e7;
+  --color-text-main: #18181b;
+  --color-text-muted: #71717a;
+  --chart-grid: #e4e4e7;
+  --chart-text: #71717a;
+}
+
+.dark, [data-theme="dark"] {
+  --color-bg-app: #09090b;
+  --color-bg-surface: #121215;
+  --color-bg-muted: #18181b;
+  --color-border: #27272a;
+  --color-text-main: #fafafa;
+  --color-text-muted: #a1a1aa;
+  --chart-grid: #27272a;
+  --chart-text: #a1a1aa;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply antialiased transition-colors duration-200;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background-color: var(--color-bg-app);
+    color: var(--color-text-main);
+  }
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.6);
+}
+
+/* Markdown typography styling */
+.markdown-body {
+  line-height: 1.65;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.3;
+}
+.markdown-body p {
+  margin-bottom: 0.75rem;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin-left: 1.25rem;
+  margin-bottom: 0.75rem;
+  list-style-type: disc;
+}
+.markdown-body ol {
+  list-style-type: decimal;
+}
+.markdown-body li {
+  margin-bottom: 0.25rem;
+}
+.markdown-body blockquote {
+  border-left: 3px solid rgba(99, 102, 241, 0.6);
+  padding-left: 0.85rem;
+  margin: 0.75rem 0;
+  font-style: italic;
+}
+.markdown-body code {
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  background: rgba(125, 125, 125, 0.15);
+}
